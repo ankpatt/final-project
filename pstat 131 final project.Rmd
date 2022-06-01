@@ -47,7 +47,6 @@ library(rjson)
 
 #download streaming history from date
 streaming_hist_0<-fromJSON("/Users/ankitapattnaik/Downloads/MyData/StreamingHistory0.json", flatten=TRUE)
-streaming_hist_0
 #transform list to dataframe so that there are 4 varaibles and respective observations (6,672)
 streaming_hist<-data.frame(t(sapply(streaming_hist_0,c)))
 
@@ -62,10 +61,43 @@ spotify <- streaming_hist %>%
   mutate(endTime = endTime - hours(6)) %>% 
   mutate(date = floor_date(endTime, "day") %>% as_date, seconds = as.numeric(msPlayed) / 1000, minutes = seconds / 60)
 
+spotify<-clean_names(spotify)
+
+#turn remainder of the of the listed variables into characters
+spotify$artist_name<-unlist(spotify$artist_name)
+spotify$track_name<-unlist(spotify$track_name)
+spotify$ms_played<-unlist(spotify$ms_played)
 
 
+```
+
+```{r}
+#decide which artists to use for my data because there are too many artists I listen to. 
+spotify %>%
+  count(artist_name) %>%
+  arrange(-n)
+#DAY6, NCT DREAM, SEVENTEEN, Rex Orange County, BTS, Honne, DAY6 (Even of Day), Sam Kim, Ravi Shankar, Tomorrow x Together, Kanye West, JANNABI, Doja Cat, AKMU, Young K, Zion. T, Tyler, The Creator, DJ Khaled, Lorde, GOT7.
+
+#begin to subset the data with my top 10 artists
+spotify <- spotify %>%
+  filter(artist_name == "DAY6" | artist_name == "NCT DREAM" | artist_name == "SEVENTEEN" | artist_name ==  "REX ORANGE COUNTY" | artist_name ==  "BTS" | artist_name == "HONNE"| artist_name == "DAY6 (Even of Day)"|artist_name == "Sam Kim"|artist_name == "Ravi Shankar"|artist_name == "TOMORROW X TOGETHER"|artist_name == "Kanye West"|artist_name == "JANNABI"|artist_name == "Doja Cat"|artist_name == "AKMU"|artist_name == "Young K"|artist_name == "Zion. T"|artist_name == "Tyler, The Creator"|artist_name == "DJ Khaled"|artist_name == "Lorde"|artist_name == "GOT7")
+#subset the data, split
+spotify_split <- initial_split(spotify, strata = artist_name, prop = 0.7)
+spotify_split
+
+spotify_train <- training(spotify_split)
+spotify_test <- testing(spotify_split)
+dim(spotify_train)
+#with 2,132 observations, we will use the train data split as our main data.
+
+```
+
+```{r}
+```
+
+```{r}
 #playback activity
-streamingHours <- spotify %>% 
+streamingHours <- spotify_train %>% 
   filter(date >= "2020-01-01") %>% 
   group_by(date) %>% 
   group_by(date = floor_date(date, "week")) %>%
@@ -79,5 +111,16 @@ streamingHours <- spotify %>%
 streamingHours
 
 
+#playback activity by artist
+
+hoursArtist <- spotify_train %>% 
+  group_by(artist_name, date = floor_date(date, "month")) %>% 
+  summarize(hours = sum(minutes) / 60) %>% 
+  ggplot(aes(x = date, y = hours, group = artist_name)) + 
+  labs(x= "Date", y= "Hours of Music") + 
+  ggtitle("Most Listened to Artists", "My top 3: DAY6, NCT DREAM, and SEVENTEEN") +
+  geom_line() + 
+  gghighlight(artist_name == "DAY6" || artist_name == "NCT DREAM" || artist_name == "SEVENTEEN") 
+hoursArtist
 ```
 
