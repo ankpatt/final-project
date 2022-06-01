@@ -1,0 +1,67 @@
+---
+title: "pstat 131 final project"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(rjson)
+library(readr)
+library(DBI)
+library(viridis)
+library(lubridate)
+library(tidyverse)
+library(ggplot2)
+library(spotifyr)
+library(plotly)
+library(knitr)
+library("gghighlight")
+library(jsonlite)
+
+library(tidymodels)
+library(ISLR) 
+library(ISLR2) 
+library(discrim)
+library(poissonreg)
+library(corrr)
+library(corrplot)
+library(klaR) 
+library(pROC)
+library(glmnet)
+library(dplyr)
+library(janitor)
+library(randomForest)
+library(rpart)
+library(rpart.plot)
+library(ranger)
+library(vip)
+```
+
+```{r}
+install.packages("RJSONIO")
+library(RJSONIO)
+library(rjson)
+
+
+streaming_hist_0<-fromJSON("/Users/ankitapattnaik/Downloads/MyData/StreamingHistory0.json", flatten=TRUE)
+streaming_hist_0
+
+streaming_hist<-as.data.frame(streaming_hist_0)
+
+str(streaming_hist_0)
+class(streaming_hist_0)
+
+make_repair_names(streaming_hist_0)
+make_clean_names(streaming_hist_0)
+colnames(streaming_hist_0)
+spotify <- streaming_hist_0 %>% 
+  as_tibble() %>% 
+  mutate_at("endTime", ymd_hm) %>% 
+  mutate(endTime = endTime - hours(6)) %>% 
+  mutate(date = floor_date(endTime, "day") %>% as_date, seconds = msPlayed / 1000, minutes = seconds / 60)
+
+```
+
