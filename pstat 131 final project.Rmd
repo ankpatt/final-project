@@ -45,23 +45,39 @@ install.packages("RJSONIO")
 library(RJSONIO)
 library(rjson)
 
-
+#download streaming history from date
 streaming_hist_0<-fromJSON("/Users/ankitapattnaik/Downloads/MyData/StreamingHistory0.json", flatten=TRUE)
 streaming_hist_0
+#transform list to dataframe so that there are 4 varaibles and respective observations (6,672)
+streaming_hist<-data.frame(t(sapply(streaming_hist_0,c)))
 
-streaming_hist<-as.data.frame(streaming_hist_0)
+#check that the new created variable is a data.frame. it is. also check column name to see that the data frame categorized accordingly.
+class(streaming_hist)
+colnames(streaming_hist)
 
-str(streaming_hist_0)
-class(streaming_hist_0)
-
-make_repair_names(streaming_hist_0)
-make_clean_names(streaming_hist_0)
-colnames(streaming_hist_0)
-spotify <- streaming_hist_0 %>% 
+#add additional variables with msPlayed. msPlayed gives us milliseconds played which makes it really difficult to work with the data so I converted it to seconds and minutes. I also added dates. For some reason msPlayed is a character, not numeric so...
+spotify <- streaming_hist %>% 
   as_tibble() %>% 
   mutate_at("endTime", ymd_hm) %>% 
   mutate(endTime = endTime - hours(6)) %>% 
-  mutate(date = floor_date(endTime, "day") %>% as_date, seconds = msPlayed / 1000, minutes = seconds / 60)
+  mutate(date = floor_date(endTime, "day") %>% as_date, seconds = as.numeric(msPlayed) / 1000, minutes = seconds / 60)
+
+
+
+#playback activity
+streamingHours <- spotify %>% 
+  filter(date >= "2020-01-01") %>% 
+  group_by(date) %>% 
+  group_by(date = floor_date(date, "week")) %>%
+  summarize(hours = sum(minutes) / 60) %>% 
+  arrange(date) %>% 
+  ggplot(aes(x = date, y = hours)) + 
+  geom_col(aes(fill = hours)) +
+  scale_fill_gradient(low = "yellow", high = "red") + 
+  labs(x= "Date", y= "Hours of music playback") + 
+  ggtitle("Playback Activity by Week")
+streamingHours
+
 
 ```
 
