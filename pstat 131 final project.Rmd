@@ -20,7 +20,7 @@ library(plotly)
 library(knitr)
 library("gghighlight")
 library(jsonlite)
-
+library(dbplyr)
 library(tidymodels)
 library(ISLR) 
 library(ISLR2) 
@@ -75,12 +75,15 @@ spotify$ms_played<-unlist(spotify$ms_played)
 #decide which artists to use for my data because there are too many artists I listen to. 
 spotify %>%
   count(artist_name) %>%
-  arrange(-n)
+  arrange(-n)%>%
+  head(.,20)
+  
 #DAY6, NCT DREAM, SEVENTEEN, Rex Orange County, BTS, Honne, DAY6 (Even of Day), Sam Kim, Ravi Shankar, Tomorrow x Together, Kanye West, JANNABI, Doja Cat, AKMU, Young K, Zion. T, Tyler, The Creator, DJ Khaled, Lorde, GOT7.
-
+set.seed(2222)
 #begin to subset the data with my top 10 artists
 spotify <- spotify %>%
-  filter(artist_name == "DAY6" | artist_name == "NCT DREAM" | artist_name == "SEVENTEEN" | artist_name ==  "REX ORANGE COUNTY" | artist_name ==  "BTS" | artist_name == "HONNE"| artist_name == "DAY6 (Even of Day)"|artist_name == "Sam Kim"|artist_name == "Ravi Shankar"|artist_name == "TOMORROW X TOGETHER"|artist_name == "Kanye West"|artist_name == "JANNABI"|artist_name == "Doja Cat"|artist_name == "AKMU"|artist_name == "Young K"|artist_name == "Zion. T"|artist_name == "Tyler, The Creator"|artist_name == "DJ Khaled"|artist_name == "Lorde"|artist_name == "GOT7")
+  filter(artist_name == "DAY6" | artist_name == "NCT DREAM" | artist_name == "SEVENTEEN" | artist_name ==  "Rex Orange County" | artist_name ==  "BTS" | artist_name == "HONNE"| artist_name == "DAY6 (Even of Day)"|artist_name == "Sam Kim"|artist_name == "Ravi Shankar"|artist_name == "TOMORROW X TOGETHER"|artist_name == "Kanye West"|artist_name == "JANNABI"|artist_name == "Doja Cat"|artist_name == "AKMU"|artist_name == "Young K"|artist_name == "Zion.T"|artist_name == "Tyler, The Creator"|artist_name == "DJ Khaled"|artist_name == "Lorde"|artist_name == "GOT7")
+
 #subset the data, split
 spotify_split <- initial_split(spotify, strata = artist_name, prop = 0.7)
 spotify_split
@@ -88,11 +91,85 @@ spotify_split
 spotify_train <- training(spotify_split)
 spotify_test <- testing(spotify_split)
 dim(spotify_train)
-#with 2,132 observations, we will use the train data split as our main data.
+#with 2,000+ observations, we will use the train data split as our main data.
 
 ```
 
 ```{r}
+# recipe 
+spotify$artist_name<-as.factor(spotify$artist_name)
+spotify$track_name<-as.factor(spotify$track_name)
+spotify$ms_played<-as.factor(spotify$ms_played)
+spotify$date<-as.factor(spotify$date)
+
+spotify_fold <- vfold_cv(spotify_train, strata = artist_name, v = 5)
+
+spotify_recipe <- recipe(track_name ~ artist_name + ms_played + date                          +seconds + minutes,
+                         data = spotify_train) %>%
+                  step_dummy(c(track_name, ms_played))%>%
+                  step_normalize(all_predictors())
+
+log_reg <- logistic_reg() %>% 
+  set_engine("glm") %>% 
+  set_mode("classification")
+
+lda_mod <- discrim_linear() %>% 
+  set_mode("classification") %>% 
+  set_engine("MASS")
+
+qda_mod <- discrim_quad() %>% 
+  set_mode("classification") %>% 
+  set_engine("MASS")
+
+log_wkflow <- workflow() %>% 
+  add_model(log_reg) %>% 
+  add_recipe(spotify_recipe)
+
+lda_wkflow <- workflow() %>% 
+  add_model(lda_mod) %>% 
+  add_recipe(spotify_recipe)
+
+qda_wkflow <- workflow() %>% 
+  add_model(qda_mod) %>% 
+  add_recipe(spotify_recipe)
+
+degree_grid <- grid_regular(degree(range = c(1, 10)), levels = 10)
+
+tune_res_log <- tune_grid(object = log_wkflow, 
+  resamples = spotify_fold, 
+  grid = degree_grid)
+
+tune_res_lda <- tune_grid(object = lda_wkflow, 
+  resamples = spotify_fold, 
+  grid = degree_grid)
+
+tune_res_qda <- tune_grid(object = qda_wkflow, 
+  resamples = spotify_fold, 
+  grid = degree_grid)
+
+collect_metrics(tune_res_log)
+
+
+###############3
+
+#tree stuff
+tree_spec <- decision_tree() %>%
+  set_engine("rpart")
+class_tree_spec <- tree_spec %>%
+  set_mode("classification")
+class_tree_wf <- workflow() %>%
+  add_model(class_tree_spec %>% set_args(cost_complexity = tune())) %>%
+  add_recipe(spotify_recipe)
+param_grid <- grid_regular(cost_complexity(range = c(-3, -1)), levels = 10)
+
+tune_res <- tune_grid(
+  class_tree_wf,
+  resamples = spotify_fold,
+  grid = param_grid,
+  metrics = metric_set(roc_auc)
+)
+autoplot(tune_res)
+
 ```
 
 ```{r}
@@ -112,7 +189,6 @@ streamingHours
 
 
 #playback activity by artist
-
 hoursArtist <- spotify_train %>% 
   group_by(artist_name, date = floor_date(date, "month")) %>% 
   summarize(hours = sum(minutes) / 60) %>% 
@@ -122,5 +198,45 @@ hoursArtist <- spotify_train %>%
   geom_line() + 
   gghighlight(artist_name == "DAY6" || artist_name == "NCT DREAM" || artist_name == "SEVENTEEN") 
 hoursArtist
+
+#top 10 most streamed tracks bar graph
+top10_track<-spotify_train %>%
+  count(spotify_train$track_name) %>%
+  arrange(-n)%>%
+  head(.,10)
+names(top10_track)<-c('track', 'count')
+
+mostStreamed <- ggplot(data = top10_track, aes(track, count)) +
+  geom_bar(stat = "identity", width = 0.7, fill = "pink")+
+  theme_minimal()+
+  geom_text(aes(label = count), hjust = 0.5, vjust = 0.7)+
+  labs(title = "Top 10 Most Streamed Songs", x = "Songs", y = "Streams")+
+  theme(axis.text.x = element_text(angle = 40, size = 7))
+mostStreamed
+
+#how many hours of kpop, by genre
+k_music <- spotify_train %>% 
+  group_by(artist_name, date = floor_date(date, "hour")) %>% 
+  mutate(artist_name = iconv(artist_name, to = "UTF-8")) %>% 
+  filter(artist_name == "DAY6" ||
+         artist_name == "NCT DREAM" ||
+         artist_name == "BTS" ||
+         artist_name == "DAY6 (Even of Day)" ||
+         artist_name == "Sam Kim" ||
+         artist_name == "TOMORROW X TOGETHER" ||
+         artist_name == "JANNABI" ||
+         artist_name == "AKMU" ||
+         artist_name == "Young K" ||
+         artist_name == "Zion.T" ||
+         artist_name == "GOT7") %>% 
+  summarize(hours = sum(minutes)/60) %>% 
+  ggplot(aes(x= artist_name, y = hours)) + 
+  geom_col(aes(fill = artist_name))+
+  scale_fill_viridis(discrete = TRUE,guide = FALSE, option="D") +
+  labs(title = "Playback by artist: Korean Music") +
+  theme_light(base_size=12, base_family="HiraKakuProN-W3") +
+  xlab("") +
+  coord_flip()
+k_music
 ```
 
