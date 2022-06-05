@@ -59,7 +59,10 @@ spotify <- streaming_hist %>%
   as_tibble() %>% 
   mutate_at("endTime", ymd_hm) %>% 
   mutate(endTime = endTime - hours(6)) %>% 
-  mutate(date = floor_date(endTime, "day") %>% as_date, seconds = as.numeric(msPlayed) / 1000, minutes = seconds / 60)
+  mutate(date = floor_date(endTime, "day") %>% as_date, seconds = as.numeric(msPlayed) / 1000, minutes = seconds / 60) 
+
+spotify$skipped <- if_else(spotify$minutes>1.5, "no","yes")
+
 
 spotify<-clean_names(spotify)
 
@@ -85,14 +88,15 @@ spotify <- spotify %>%
   filter(artist_name == "DAY6" | artist_name == "NCT DREAM" | artist_name == "SEVENTEEN" | artist_name ==  "Rex Orange County" | artist_name ==  "BTS" | artist_name == "HONNE"| artist_name == "DAY6 (Even of Day)"|artist_name == "Sam Kim"|artist_name == "Ravi Shankar"|artist_name == "TOMORROW X TOGETHER"|artist_name == "Kanye West"|artist_name == "JANNABI"|artist_name == "Doja Cat"|artist_name == "AKMU"|artist_name == "Young K"|artist_name == "Zion.T"|artist_name == "Tyler, The Creator"|artist_name == "DJ Khaled"|artist_name == "Lorde"|artist_name == "GOT7")
 
 #subset the data, split
-spotify_split <- initial_split(spotify, strata = artist_name, prop = 0.7)
-spotify_split
+spotify_split <- initial_split(spotify, strata = skipped, prop = 0.7)
+class(spotify_split) #check that the data has split
 
 spotify_train <- training(spotify_split)
 spotify_test <- testing(spotify_split)
 dim(spotify_train)
 #with 2,000+ observations, we will use the train data split as our main data.
 
+na.omit(spotify_train)
 ```
 
 ```{r}
@@ -101,12 +105,13 @@ spotify$artist_name<-as.factor(spotify$artist_name)
 spotify$track_name<-as.factor(spotify$track_name)
 spotify$ms_played<-as.factor(spotify$ms_played)
 spotify$date<-as.factor(spotify$date)
+spotify$date<-as.factor(spotify$skipped)
+set.seed(2435)
+spotify_fold <- vfold_cv(spotify_train, strata = minutes, v = 10, repeats = 5, na.rm= TRUE)
 
-spotify_fold <- vfold_cv(spotify_train, strata = artist_name, v = 5)
-
-spotify_recipe <- recipe(track_name ~ artist_name + ms_played + date                          +seconds + minutes,
+spotify_recipe <- recipe(skipped ~ artist_name+ track_name + ms_played + date                          +seconds+minutes,
                          data = spotify_train) %>%
-                  step_dummy(c(track_name, ms_played))%>%
+                  step_dummy(all_nominal_predictors())%>%
                   step_normalize(all_predictors())
 
 log_reg <- logistic_reg() %>% 
@@ -132,6 +137,15 @@ lda_wkflow <- workflow() %>%
 qda_wkflow <- workflow() %>% 
   add_model(qda_mod) %>% 
   add_recipe(spotify_recipe)
+
+log_fit <- fit(log_wkflow, spotify_train)
+lda_fit <- fit(lda_wkflow, spotify_train)
+qda_fit <- fit(lqda_wkflow, spotify_train)
+
+titanic_log<-predict(log_fit, new_data = titanic_train, type = "prob")
+titanic_log_col<-bind_cols(titanic_log, titanic_train)
+log_reg_acc<- augment(log_fit, new_data= titanic_train) %>% accuracy(truth=survived, estimate=.pred_class)
+log_reg_acc
 
 degree_grid <- grid_regular(degree(range = c(1, 10)), levels = 10)
 
@@ -234,7 +248,7 @@ k_music <- spotify_train %>%
   geom_col(aes(fill = artist_name))+
   scale_fill_viridis(discrete = TRUE,guide = FALSE, option="D") +
   labs(title = "Playback by artist: Korean Music") +
-  theme_light(base_size=12, base_family="HiraKakuProN-W3") +
+  theme_light(base_size=12) +
   xlab("") +
   coord_flip()
 k_music
