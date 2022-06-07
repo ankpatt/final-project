@@ -38,15 +38,13 @@ library(rpart)
 library(rpart.plot)
 library(ranger)
 library(vip)
-```
-
-```{r}
-install.packages("RJSONIO")
 library(RJSONIO)
 library(rjson)
-
+tidymodels_prefer()
+```
+```{r}
 #download streaming history from date
-streaming_hist_0<-fromJSON("/Users/ankitapattnaik/Downloads/MyData/StreamingHistory0.json", flatten=TRUE)
+streaming_hist_0<-RJSONIO::fromJSON("/Users/ankitapattnaik/Downloads/MyData/StreamingHistory0.json", flatten=TRUE)
 #transform list to dataframe so that there are 4 varaibles and respective observations (6,672)
 streaming_hist<-data.frame(t(sapply(streaming_hist_0,c)))
 
@@ -59,10 +57,12 @@ spotify <- streaming_hist %>%
   as_tibble() %>% 
   mutate_at("endTime", ymd_hm) %>% 
   mutate(endTime = endTime - hours(6)) %>% 
-  mutate(date = floor_date(endTime, "day") %>% as_date, seconds = as.numeric(msPlayed) / 1000, minutes = seconds / 60) 
-
-spotify$skipped <- if_else(spotify$minutes>1.5, "no","yes")
-
+  mutate(date = floor_date(endTime, "day") %>% as_date, seconds = as.numeric(msPlayed) / 1000, minutes = seconds / 60) %>%
+  mutate(skipped= case_when(
+    minutes > 1.5 ~ "streamed",
+    minutes < 1.5 ~ "skipped"
+  )) %>%
+  mutate(skipped = factor(skipped, levels = c("skipped", "streamed")))
 
 spotify<-clean_names(spotify)
 
@@ -81,6 +81,10 @@ spotify %>%
   arrange(-n)%>%
   head(.,20)
   
+spotify %>%
+  count(track_name) %>%
+  arrange(-n)%>%
+  head(.,20)
 #DAY6, NCT DREAM, SEVENTEEN, Rex Orange County, BTS, Honne, DAY6 (Even of Day), Sam Kim, Ravi Shankar, Tomorrow x Together, Kanye West, JANNABI, Doja Cat, AKMU, Young K, Zion. T, Tyler, The Creator, DJ Khaled, Lorde, GOT7.
 set.seed(2222)
 #begin to subset the data with my top 10 artists
@@ -88,6 +92,21 @@ spotify <- spotify %>%
   filter(artist_name == "DAY6" | artist_name == "NCT DREAM" | artist_name == "SEVENTEEN" | artist_name ==  "Rex Orange County" | artist_name ==  "BTS" | artist_name == "HONNE"| artist_name == "DAY6 (Even of Day)"|artist_name == "Sam Kim"|artist_name == "Ravi Shankar"|artist_name == "TOMORROW X TOGETHER"|artist_name == "Kanye West"|artist_name == "JANNABI"|artist_name == "Doja Cat"|artist_name == "AKMU"|artist_name == "Young K"|artist_name == "Zion.T"|artist_name == "Tyler, The Creator"|artist_name == "DJ Khaled"|artist_name == "Lorde"|artist_name == "GOT7")
 
 #subset the data, split
+#factorize all categorical values
+spotify$artist_name<-as.factor(spotify$artist_name)
+spotify$track_name<-as.factor(spotify$track_name)
+spotify$date<-as.factor(spotify$date)
+spotify$skipped<-as.factor(spotify$skipped)
+
+#get rid of end_time and ms_played because they are useless to us, we converted ms_played to a more easily interpreted value: seconds and minutes
+spotify$end_time<-NULL
+spotify$ms_played<-NULL
+
+#double check that there is a good spread of skipped and unskipped songs. it is about a 63:37 split, pretty good. 
+spotify %>%
+  count(skipped) %>%
+  arrange(-n)
+
 spotify_split <- initial_split(spotify, strata = skipped, prop = 0.7)
 class(spotify_split) #check that the data has split
 
@@ -95,28 +114,33 @@ spotify_train <- training(spotify_split)
 spotify_test <- testing(spotify_split)
 dim(spotify_train)
 #with 2,000+ observations, we will use the train data split as our main data.
-
-na.omit(spotify_train)
 ```
 
 ```{r}
 # recipe 
-spotify$artist_name<-as.factor(spotify$artist_name)
-spotify$track_name<-as.factor(spotify$track_name)
-spotify$ms_played<-as.factor(spotify$ms_played)
-spotify$date<-as.factor(spotify$date)
-spotify$date<-as.factor(spotify$skipped)
-set.seed(2435)
-spotify_fold <- vfold_cv(spotify_train, strata = minutes, v = 10, repeats = 5, na.rm= TRUE)
 
-spotify_recipe <- recipe(skipped ~ artist_name+ track_name + ms_played + date                          +seconds+minutes,
+set.seed(2435)
+spotify_fold <- vfold_cv(spotify_train, strata = skipped, v = 10, repeats = 5, na.rm= TRUE)
+
+#get rid of end_time column, it is useless to us
+
+spotify_recipe <- recipe(skipped ~ artist_name+ track_name + date                          +seconds+minutes,
                          data = spotify_train) %>%
-                  step_dummy(all_nominal_predictors())%>%
-                  step_normalize(all_predictors())
+                  step_zv(all_predictors(), -all_outcomes())%>%
+                  step_dummy(all_nominal(), -all_outcomes())%>%
+                  step_normalize(all_predictors(), -all_outcomes())%>%
+  prep(verbose=TRUE,retain=TRUE)
+
 
 log_reg <- logistic_reg() %>% 
   set_engine("glm") %>% 
   set_mode("classification")
+log_reg
+
+log_wkflow <- workflow() %>% 
+  add_model(log_reg) %>% 
+  add_recipe(spotify_recipe)
+log_wkflow
 
 lda_mod <- discrim_linear() %>% 
   set_mode("classification") %>% 
@@ -126,10 +150,6 @@ qda_mod <- discrim_quad() %>%
   set_mode("classification") %>% 
   set_engine("MASS")
 
-log_wkflow <- workflow() %>% 
-  add_model(log_reg) %>% 
-  add_recipe(spotify_recipe)
-
 lda_wkflow <- workflow() %>% 
   add_model(lda_mod) %>% 
   add_recipe(spotify_recipe)
@@ -138,13 +158,24 @@ qda_wkflow <- workflow() %>%
   add_model(qda_mod) %>% 
   add_recipe(spotify_recipe)
 
-log_fit <- fit(log_wkflow, spotify_train)
-lda_fit <- fit(lda_wkflow, spotify_train)
-qda_fit <- fit(lqda_wkflow, spotify_train)
 
-titanic_log<-predict(log_fit, new_data = titanic_train, type = "prob")
-titanic_log_col<-bind_cols(titanic_log, titanic_train)
-log_reg_acc<- augment(log_fit, new_data= titanic_train) %>% accuracy(truth=survived, estimate=.pred_class)
+#apply workflow to training data 
+log_fit <- fit(log_wkflow, spotify_train)
+log_fit
+lda_fit <- fit(lda_wkflow, spotify_train)
+lda_fit
+qda_fit <- fit(lda_wkflow, spotify_train)
+qda_fit
+```
+
+
+```{r}
+##### draft
+
+spotify_log<-predict(log_fit, new_data = spotify_train, type = "prob")
+
+spotify_log_col<-bind_cols(spotify_log, spotify_train)
+log_reg_acc<- augment(log_fit, new_data= spotify_train) %>% accuracy(truth=skipped, estimate=.pred_class)
 log_reg_acc
 
 degree_grid <- grid_regular(degree(range = c(1, 10)), levels = 10)
@@ -162,6 +193,8 @@ tune_res_qda <- tune_grid(object = qda_wkflow,
   grid = degree_grid)
 
 collect_metrics(tune_res_log)
+collect_metrics(tune_res_qda)
+collect_metrics(tune_res_lda)
 
 
 ###############3
@@ -188,7 +221,7 @@ autoplot(tune_res)
 
 ```{r}
 #playback activity
-streamingHours <- spotify_train %>% 
+streamingHours <- spotify %>% 
   filter(date >= "2020-01-01") %>% 
   group_by(date) %>% 
   group_by(date = floor_date(date, "week")) %>%
@@ -203,7 +236,7 @@ streamingHours
 
 
 #playback activity by artist
-hoursArtist <- spotify_train %>% 
+hoursArtist <- spotify %>% 
   group_by(artist_name, date = floor_date(date, "month")) %>% 
   summarize(hours = sum(minutes) / 60) %>% 
   ggplot(aes(x = date, y = hours, group = artist_name)) + 
@@ -214,7 +247,7 @@ hoursArtist <- spotify_train %>%
 hoursArtist
 
 #top 10 most streamed tracks bar graph
-top10_track<-spotify_train %>%
+top10_track<-spotify %>%
   count(spotify_train$track_name) %>%
   arrange(-n)%>%
   head(.,10)
@@ -229,7 +262,7 @@ mostStreamed <- ggplot(data = top10_track, aes(track, count)) +
 mostStreamed
 
 #how many hours of kpop, by genre
-k_music <- spotify_train %>% 
+k_music <- spotify %>% 
   group_by(artist_name, date = floor_date(date, "hour")) %>% 
   mutate(artist_name = iconv(artist_name, to = "UTF-8")) %>% 
   filter(artist_name == "DAY6" ||
@@ -252,5 +285,11 @@ k_music <- spotify_train %>%
   xlab("") +
   coord_flip()
 k_music
+
+#boxplot of skipped and songs
+ggplot(data = spotify, mapping = aes(y = skipped, x = track_name, fill = track_name)) + 
+  geom_boxplot()+                     
+  theme(legend.position = "none", axis.text.x = element_text(size = 8, angle = 60, hjust = 1))+   # remove legend (redundant)+
+  labs(title = "Boxplot of Skipped by Track Name", x = '')  
 ```
 
