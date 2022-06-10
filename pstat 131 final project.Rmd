@@ -1,12 +1,22 @@
 ---
 title: "pstat 131 final project"
-output: html_document
+output:
+    html_document:
+      toc: true
+      toc_float: true
+      code_folding: show
 ---
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 ```
-- For my project I decided to analyze my Spotify data. When I first recieved my data it was full of so many 
+
+
+- For my project I decided to analyze my Spotify data. The dataset provided to me was a personalized data set given to my by Spotify after requesting it through my Settings" on the web platform. 
+
+
+##Loading Packages
+- First I downloaded the necessary packages, which were A LOT. 
 ```{r, include = FALSE}
 library(rjson)
 library(readr)
@@ -44,17 +54,41 @@ tidymodels_prefer()
 library(randomForest)
 library(xgboost)
 ```
+
+
+## Data
+There were a lot of files provided to me through the zip provided (such as payment history, playlists, family plans, personal information) and I thought it would be best to work with the `StreamingHistory0.json` file, as it tracked every song I streamed, the artist, the milliseconds I streamed it, the date I streamed it. 
+
+- I downloaded the JSON data provided to me into R. At first it was difficult to work with because it downloaded as a list. 
+
+
 ```{r}
 #download streaming history from date
 streaming_hist_0<-RJSONIO::fromJSON("/Users/ankitapattnaik/Downloads/MyData/StreamingHistory0.json", flatten=TRUE)
-#transform list to dataframe so that there are 4 varaibles and respective observations (6,672)
+```
+
+
+I then transformed the list into a dataframe using `sapply()` and turned my respective data to a data frame with 4 variables and 6,672 observations. 
+
+
+```{r}
 streaming_hist<-data.frame(t(sapply(streaming_hist_0,c)))
 
 #check that the new created variable is a data.frame. it is. also check column name to see that the data frame categorized accordingly.
 class(streaming_hist)
 colnames(streaming_hist)
+```
 
-#add additional variables with msPlayed. msPlayed gives us milliseconds played which makes it really difficult to work with the data so I converted it to seconds and minutes. I also added dates. For some reason msPlayed is a character, not numeric so...
+
+##Variable Transformation
+Interpreting the `msPlayed`, or milliseconds played variable, was a little difficult so I transformed that data into seconds and minutes. I also took the `endTime` column and extracted the date to make a new variable with just data in the format of yyyy-mm-dd. That way my data would be easier to inetrpret. 
+
+I additionally created a `skipped` variable which determined whether or not I skipped the data based off the now minutes played. If I listened to the song for less than a minute and a half, I assumed I skipped the song and if it was more than one minute and thirty seconds, I assumed I streamed it. I based this off the google result for the timing of an average song which is: three minutes and thirty seconds.
+
+I then called `clean_names()` function to the data to make the variable names easier to work with and unlisted the variables into characters, as the observations of each data set seemed to have stored into my data frame as lists. 
+
+
+```{r}
 spotify <- streaming_hist %>% 
   as_tibble() %>% 
   mutate_at("endTime", ymd_hm) %>% 
@@ -75,6 +109,11 @@ spotify$ms_played<-unlist(spotify$ms_played)
 
 
 ```
+
+##EDA: Exploratory Data Analysis 
+
+I had a lot of fun making these graphs. I found an online source that guided me through seeing how I could manipulate my variables to display specifically Spotify data and I had a lot of fun playing around seeing my streaming history. 
+
 
 ```{r}
 #playback activity
@@ -319,7 +358,7 @@ param_grid1 <- grid_regular(cost_complexity(range = c(-3, -1)), levels = 10)
 tune_res_accuracy <- tune_grid(
   class_tree_wf, 
   resamples = spotify_fold, 
-  grid = param_grid, 
+  grid = param_grid1, 
   metrics = metric_set(accuracy)
 )
 autoplot(tune_res_accuracy)
@@ -348,6 +387,29 @@ tune_res_en <- tune_grid(
 )
 
 autoplot(tune_res_en)
+
+ collect_metrics(tune_res_en)%>%
+  arrange(-mean)
+```
+
+```{r}
+ #random forest
+ rf_spec <- rand_forest() %>%
+  set_engine("ranger", importance = "impurity") %>%
+  set_mode("classification")
+rf_wf <- workflow() %>%
+  add_model(rf_spec %>% set_args(mtry = tune(), trees = tune(), min_n = tune())) %>%
+  add_recipe(spotify_recipe)
+
+param_grid2 <- grid_regular(mtry(range = c(1, 8)),trees(range = c(50,300)),min_n(range=c(1,5)), levels = 8)
+tune_res_rf <- tune_grid(
+  rf_wf,
+  resamples = spotify_fold,
+  grid = param_grid2,
+  metrics = metric_set(roc_auc)
+)
+
+autoplot(tune_res_rf)
 ```
 
 ```{r}
@@ -371,7 +433,9 @@ autoplot(tune_res_bt)
 collect_metrics(tune_res_bt)%>%
   arrange(-mean)
 
-#compare between boosted tree and 
+#compare between boosted tree and random forest
+
+
 ```
 
 
