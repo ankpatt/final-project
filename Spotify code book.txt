@@ -1,0 +1,6 @@
+- `artist_name`: The name of the artist, to the song streamed. 
+- `track_name`: The title of the track streamed. 
+- `date`: The date at which the song was streamed. 
+- `seconds`: How many seconds I streamed the song for. 
+- `minutes`: How many minutes I streamed the song for.  
+- `skipped`: Whether or not I skipped or streamed the song depending on it's playtime. 
