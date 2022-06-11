@@ -1,0 +1,505 @@
+---
+title: "PSTAT 131 Final Project- Ankita Pattnaik"
+output:
+    html_document:
+      toc: true
+      toc_float: true
+      code_folding: show
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+###Spotify Personal Data Analysis
+
+##Introduction
+
+For my project I decided to analyze my Spotify data. The dataset provided to me was a personalized data set given to my by Spotify after requesting it through my Settings" on the web platform. 
+
+Spotify is a major music streaming site which is used every day by millions. With a student plan, you pay $5.99 a month to get unlimited streams, personally curated playlists, and even a subscription to Hulu! You can't miss out. 
+
+I decided to analyze my Spotify data because I don't listen to music often. Every year Spotify provides an end of the year playlist and runs you through a personally curated "Spotify Wrapped" which shows you your most streamed and top artists. I wanted to see for myself how accurate this wrapped data was so I was interested to look into it myself. 
+
+For context these were the variables I worked with, which can also be elaborated on in the codebook:
+- `end_time`: The data and exact time (down to the second) the song was streamed. This variable contains observations provided by Spotify. I later remove this variable. 
+- `artist_name`: The name of the artist, to the song streamed. This variable contains observations provided by Spotify.
+- `track_name`: The title of the track streamed. This variable contains observations provided by Spotify.
+- `date`: The date at which the song was streamed. This variable contains observations provided by Spotify.
+- `seconds`: How many seconds I streamed the song for. This is a variable I created with the provided variable `ms_played`. 
+- `minutes`: How many minutes I streamed the song for. This is a variable I also created with the previously created `minutes` variable. 
+- `skipped`: Whether or not I skipped or streamed the song depending on it's playtime. If the song streamed for less than one minute and thirty seconds, I assume I skipped. If the song streamed for more than one minute and thirty seconds, I assume I streamed. This is also a variable I created based on the previously created `minutes` variable. 
+
+
+
+##Loading Packages
+- First I downloaded the necessary packages, which were A LOT. 
+```{r, include = FALSE}
+library(rjson)
+library(readr)
+library(DBI)
+library(viridis)
+library(lubridate)
+library(tidyverse)
+library(ggplot2)
+library(spotifyr)
+library(plotly)
+library(knitr)
+library("gghighlight")
+library(jsonlite)
+library(dbplyr)
+library(tidymodels)
+library(ISLR) 
+library(ISLR2) 
+library(discrim)
+library(poissonreg)
+library(corrr)
+library(corrplot)
+library(klaR) 
+library(pROC)
+library(glmnet)
+library(dplyr)
+library(janitor)
+library(randomForest)
+library(rpart)
+library(rpart.plot)
+library(ranger)
+library(vip)
+library(RJSONIO)
+library(rjson)
+tidymodels_prefer()
+library(randomForest)
+library(xgboost)
+```
+
+
+## Data
+There were a lot of files provided to me through the zip provided (such as payment history, playlists, family plans, personal information) and I thought it would be best to work with the `StreamingHistory0.json` file, as it tracked every song I streamed, the artist, the milliseconds I streamed it, the date I streamed it. 
+
+- I downloaded the JSON data provided to me into R. At first it was difficult to work with because it downloaded as a list. 
+
+
+```{r}
+#download streaming history from date
+streaming_hist_0<-RJSONIO::fromJSON("/Users/ankitapattnaik/Downloads/MyData/StreamingHistory0.json", flatten=TRUE)
+```
+
+
+I then transformed the list into a dataframe using `sapply()` and turned my respective data to a data frame with 4 variables and 6,672 observations. 
+
+
+```{r}
+#turn list into dataframe
+streaming_hist<-data.frame(t(sapply(streaming_hist_0,c)))
+
+#check that the new created variable is a data.frame. it is. also check column name to see that the data frame categorized accordingly.
+class(streaming_hist)
+colnames(streaming_hist) #check that the variables are in their respective columns
+```
+
+
+##Variable Transformation
+Interpreting the `msPlayed`, or milliseconds played variable, was a little difficult so I transformed that data into seconds and minutes. I also took the `endTime` column and extracted the date to make a new variable with just data in the format of yyyy-mm-dd. That way my data would be easier to inetrpret. 
+
+I additionally created a `skipped` variable which determined whether or not I skipped the data based off the now minutes played. If I listened to the song for less than a minute and a half, I assumed I skipped the song and if it was more than one minute and thirty seconds, I assumed I streamed it. I based this off the google result for the timing of an average song which is: three minutes and thirty seconds.
+
+I then called `clean_names()` function to the data to make the variable names easier to work with and unlisted the variables into characters, as the observations of each data set seemed to have stored into my data frame as lists. 
+
+
+```{r}
+spotify <- streaming_hist %>% 
+  as_tibble() %>% 
+  mutate_at("endTime", ymd_hm) %>% 
+  mutate(endTime = endTime - hours(6)) %>% 
+  mutate(date = floor_date(endTime, "day") %>% as_date, seconds = as.numeric(msPlayed) / 1000, minutes = seconds / 60) %>%
+  mutate(skipped= case_when(
+    minutes > 1.5 ~ "streamed",
+    minutes < 1.5 ~ "skipped"
+  )) %>%
+  mutate(skipped = factor(skipped, levels = c("skipped", "streamed")))
+
+spotify<-clean_names(spotify)
+
+#turn remainder of the of the listed variables into characters
+spotify$artist_name<-unlist(spotify$artist_name)
+spotify$track_name<-unlist(spotify$track_name)
+spotify$ms_played<-unlist(spotify$ms_played)
+
+
+```
+
+##EDA: Exploratory Data Analysis 
+
+I had a lot of fun making these graphs. I found an online source that guided me through seeing how I could manipulate my variables to display specifically Spotify data and I had a lot of fun playing around seeing my streaming history. 
+
+
+- First I took a look at my playback activity week by week. I calculated the average hours of music through the information given to my in my `minutes` category. I then took my date and grouped it by week. 
+```{r}
+#playback activity
+streamingHours <- spotify %>% 
+  filter(date >= "2020-01-01") %>% 
+  group_by(date) %>% 
+  group_by(date = floor_date(date, "week")) %>%
+  summarize(hours = sum(minutes) / 60) %>% 
+  arrange(date) %>% 
+  ggplot(aes(x = date, y = hours)) + 
+  geom_col(aes(fill = hours)) +
+  scale_fill_gradient(low = "yellow", high = "red") + 
+  labs(x= "Date", y= "Hours of music playback") + 
+  ggtitle("Playback Activity by Week")
+streamingHours
+```
+
+I notice that I didn't listen to much music from August to the end of 2021 and I think that's because I was studying abraod! I had a lot to keep busy so, not much Spotify. 
+
+
+- I then took a look at my playback activity by artist. I highlighted my top 3 artist and using the same information from the previous EDA, I categorized the hours listened by week by my top 3 artists which are: DAY6, NCT DREAM, and Seventeen. 
+```{r}
+#playback activity by artist
+hoursArtist <- spotify %>% 
+  group_by(artist_name, date = floor_date(date, "month")) %>% 
+  summarize(hours = sum(minutes) / 60) %>% 
+  ggplot(aes(x = date, y = hours, group = artist_name)) + 
+  labs(x= "Date", y= "Hours of Music") + 
+  ggtitle("Most Listened to Artists", "My top 3: DAY6, NCT DREAM, and SEVENTEEN") +
+  geom_line() + 
+  gghighlight(artist_name == "DAY6" || artist_name == "NCT DREAM" || artist_name == "SEVENTEEN") 
+hoursArtist
+```
+Towards the end of last year I was really feeling Day6, clearly. 
+
+
+- I then focused on the `track_name` to see which tracks I listened to the most. I created a new variable `top10_track` and counted how many times I had streamed each song. I then took the top10 and worked with that to determine which 10 songs I listened to the most, and how many times I streamed it. 
+```{r}
+#top 10 most streamed tracks bar graph
+top10_track<-spotify %>%
+  count(spotify$track_name) %>%
+  arrange(-n)%>%
+  head(.,10)
+names(top10_track)<-c('track', 'counter')
+
+# Listened time vs. number of songs
+listenedTimes_songs <- top10_track %>% 
+  group_by(track) %>% 
+  mutate(track = iconv(track, to = "UTF-8")) %>% 
+  summarize(timesStreamed = sum(counter), total_songs= n_distinct(timesStreamed)) %>%
+  arrange(desc(timesStreamed)) %>% 
+  slice(1:10) %>% 
+  ggplot(aes(x=track , y = timesStreamed,color = track)) +
+  geom_point(size = 3, shape = 15) +
+  scale_color_viridis(discrete = TRUE, option="C") +
+  theme_light(base_size=10, base_family="HiraKakuProN-W3") +
+  theme (
+    axis.text.x = element_blank(),
+    panel.grid.major.x = element_blank(),
+    panel.border = element_blank(),
+    axis.ticks.x = element_blank(),
+  ) +
+  labs(title = "Most Streamed Tracks ") +
+  xlab("Tracks")+
+  ylab("Streams")
+listenedTimes_songs
+
+```
+This was fun to see because it seems like 7 of the 10 sings i listened to are from the same album of the group I mentioned, NCT DREAM. "KEEP IT UP" is a song that really resonated with me when it came out so I listened to it on repeat, hence the 79 streams. 
+
+- Clearly, I listen to a lot of kpop, so I decided to categorize how many hours of kpop I listened to, by its genre. I once again created a new category `top10_artists` and counted how many times I had streamed each artist. Without limiting the data to `head(.,10)` I went through the top 20 list and excluded the non-Korean artists to curate my top 10 Korean artists. I used the `filter()` function to focus on the top 10 artist names and once again compared it to the hours streamed respectively to each artist calculated by the `minutes` variables.
+```{r}
+#how many hours of kpop, by genre
+top10_artist<-spotify %>%
+  count(spotify$artist_name) %>%
+  arrange(-n)%>%
+  head(.,10)
+names(top10_artist)<-c('artist name', 'count')
+top10_artist
+
+k_music <- spotify %>% 
+  group_by(artist_name, date = floor_date(date, "hour")) %>% 
+  mutate(artist_name = iconv(artist_name, to = "UTF-8")) %>% 
+  filter(artist_name == "DAY6" ||
+         artist_name == "NCT DREAM" ||
+         artist_name == "SEVENTEEN" ||
+         artist_name == "BTS" ||
+         artist_name == "DAY6 (Even of Day)" ||
+         artist_name == "Sam Kim" ||
+         artist_name == "TOMORROW X TOGETHER" ||
+         artist_name == "JANNABI" ||
+         artist_name == "AKMU" ||
+         artist_name == "Young K" ||
+         artist_name == "Zion.T") %>% 
+  summarize(hours = sum(minutes)/60) %>% 
+  ggplot(aes(x= artist_name, y = hours)) + 
+  geom_col(aes(fill = artist_name))+
+  scale_fill_viridis(discrete = TRUE,guide = FALSE, option="D") +
+  labs(title = "Playback by artist: Korean Music") +
+  theme_light(base_size=12) +
+  xlab("") +
+  coord_flip()
+k_music
+```
+As mentioned before, in the time span of April 2021 to April 2022, I listened to a lot of DAY6.  
+
+- I then decided to once again look at my playback with more detail. Going back to the first EDA, we saw my playback by week but what about by hour? I created a grid that averaged how much music I streamed on average by hour, by day. 
+```{r}  
+#listening to spotify throughout the week
+dayHour <- spotify %>% 
+  group_by(date, hour = hour(end_time), weekday = wday(date, label = TRUE)) %>% 
+  summarize(hoursListened = sum(minutes)/60)
+
+dayHour %>% 
+  group_by(weekday, hour) %>% 
+  summarize(hours = sum(hoursListened)) %>% 
+  ggplot(aes(x= hour, y= weekday, fill= hours)) +
+  geom_tile() +
+  scale_x_continuous(breaks= seq(0, 24, 2)) +
+  scale_fill_gradient(low= "darkolivegreen1", high= "cyan4") +
+  labs(title= "Average Spotify time during the week", 
+       x= "Hour", y= "") +
+  theme_light()
+```
+I guess I really enjoy listening to music Saturday evenings and Wednesday nights into Thursday mornings. Otherwise, I am pretty low on my music streaming. To be honest, I don't listen to a lot of music so this makes sense to me! I am shocked to see that within the whole year, I have never listened to music on Monday mornings. We can also assume that if I do listen to music, its usually towards the end of the day. 
+
+##Data Splitting
+Before I split my data I wanted to clean it up a little bit more. There were a variety of artists I streamed, so I decided to create a consicise list and focused on my top 20. This narrowed down my observations to about 3,500. 
+
+I used the `filter()` function on my spotify dataset and got rid of the `end_time` and `ms_played` variable because they were too hard to interpret. 
+```{r}
+#decide which artists to use for my data because there are too many artists I listen to. 
+spotify %>%
+  count(artist_name) %>%
+  arrange(-n)%>%
+  head(.,20)
+  
+#DAY6, NCT DREAM, SEVENTEEN, Rex Orange County, BTS, Honne, DAY6 (Even of Day), Sam Kim, Ravi Shankar, Tomorrow x Together, Kanye West, JANNABI, Doja Cat, AKMU, Young K, Zion. T, Tyler, The Creator, DJ Khaled, Lorde, GOT7.
+set.seed(2222)
+#begin to subset the data with my top 10 artists
+spotify <- spotify %>%
+  filter(artist_name == "DAY6" | artist_name == "NCT DREAM" | artist_name == "SEVENTEEN" | artist_name ==  "Rex Orange County" | artist_name ==  "BTS" | artist_name == "HONNE"| artist_name == "DAY6 (Even of Day)"|artist_name == "Sam Kim"|artist_name == "Ravi Shankar"|artist_name == "TOMORROW X TOGETHER"|artist_name == "Kanye West"|artist_name == "JANNABI"|artist_name == "Doja Cat"|artist_name == "AKMU"|artist_name == "Young K"|artist_name == "Zion.T"|artist_name == "Tyler, The Creator"|artist_name == "DJ Khaled"|artist_name == "Lorde"|artist_name == "GOT7")
+
+#subset the data, split
+
+#get rid of end_time and ms_played because they are useless to us, we converted ms_played to a more easily interpreted value: seconds and minutes
+spotify$end_time<-NULL
+spotify$ms_played<-NULL
+
+#double check that there is a good spread of skipped and unskipped songs. it is about a 63:37 split, pretty good. 
+spotify %>%
+  count(skipped) %>%
+  arrange(-n)
+```
+
+I then went on to split the data, as I would and split it to training and testing data. I factored the variables that were non-numeric.
+```{r}
+spotify_split <- initial_split(spotify, strata = skipped, prop = 0.7)
+class(spotify_split) #check that the data has split
+
+spotify_train <- training(spotify_split)
+spotify_test <- testing(spotify_split)
+dim(spotify_train)
+
+#factorize all categorical values
+spotify_train$artist_name<-as.factor(spotify_train$artist_name)
+spotify_train$track_name<-as.factor(spotify_train$track_name)
+spotify_train$date<-as.factor(spotify_train$date)
+spotify_train$skipped<-as.factor(spotify_train$skipped)
+#with 2,000+ observations, we will use the train data split as our main data.
+```
+
+
+##Recipe
+I created my recipe with respect to `skipped`. I wanted to predict whether or not my data would be streamed or skipped based off my streaming history. This, however comes  back to haunt me because my analysis is all skewed to be collinear.
+
+-I used the `step_nzv()` function for the first time. This was to remove any NA variables or variables that might skew my data, but more so the former. There are some songs that I listened to for 0 seconds, that were still logged into my streaming history so I decided to get rid of those. 
+
+```{r}
+spotify_recipe <- recipe(skipped ~ artist_name+ track_name + date                          +seconds+minutes,
+                         data = spotify_train) %>%
+                  step_dummy(all_nominal(), -all_outcomes())%>%
+                  step_normalize(all_predictors(), -all_outcomes())%>%
+                  step_nzv(all_predictors())
+```
+
+##Models
+#Classification Tree
+I first decided to fit my data to classification trees. 
+```{r}
+#fitting classification trees
+tree_spec <- decision_tree() %>%
+  set_engine("rpart")
+class_tree_spec <- tree_spec %>%
+  set_mode("classification")
+class_tree_fit <- class_tree_spec %>%
+  fit(skipped ~ ., data = spotify_train)
+#to implement a little of what we learned LOL this classification decision tree is a LOL though. really put into prespective how my skipped and streamed variables go though :) 
+class_tree_fit %>%
+  extract_fit_engine() %>%
+  rpart.plot(roundint = FALSE)
+```
+Nothing much to see here, it is what it is. 
+
+#Check Accuracy
+I then decided to check my training set accuracy becuase that's how we approached the classification tree in class. 
+```{r}
+#check training set accuracy 
+augment(class_tree_fit, new_data = spotify_train) %>%
+  accuracy(truth = skipped, estimate = .pred_class)
+#very accurate
+
+#check confusion matrix
+augment(class_tree_fit, new_data = spotify_train) %>%
+  conf_mat(truth = skipped, estimate = .pred_class)
+
+```
+Again, nothing much to see here because my data is collinear. But it is interesting to see how the data is distributed to skipped and streamed. 
+
+
+I wanted to compare it to my testing data, but as I continued to do so the results were the same, being "1". 
+
+
+##Folding Data
+I then, folded the data and created an accuracy grid with my accuracy data. 
+
+```{r}
+set.seed(2435)
+spotify_fold <- vfold_cv(spotify_train, strata = skipped, v = 10, repeats = 2, na.rm= TRUE)
+```
+
+#Accuracy Grid
+```{r}
+#tree 
+tree_spec <- decision_tree() %>%
+  set_engine("rpart")
+class_tree_spec <- tree_spec %>%
+  set_mode("classification")
+class_tree_wf <- workflow() %>%
+  add_model(class_tree_spec %>% set_args(cost_complexity = tune())) %>%
+  add_recipe(spotify_recipe)
+
+###  accuracy grid
+param_grid1 <- grid_regular(cost_complexity(range = c(-3, -1)), levels = 10)
+
+tune_res_accuracy <- tune_grid(
+  class_tree_wf, 
+  resamples = spotify_fold, 
+  grid = param_grid1, 
+  metrics = metric_set(accuracy)
+)
+autoplot(tune_res_accuracy)
+#we could have predicted this from our decision tree because it was either 1 or 0. 
+
+```
+This graph continues to prove and show that my data has nothing much to work with other than 0 or 1. My accuracy is clearly 1 here, amazing! I mean of course we can assume I streamed the song. VERY GOOD ACCURACY :D 
+
+#Elastic Net
+I then decided to create an elastic net, again, approaching my data the way we had on the homeworks and labs. 
+```{r}
+### fitting and tuning an elastic net
+elastic_net_spec <- multinom_reg(penalty = tune(), 
+                                 mixture = tune()) %>% 
+  set_mode("classification") %>% 
+  set_engine("glmnet")
+
+en_workflow <- workflow() %>% 
+  add_recipe(spotify_recipe) %>% 
+  add_model(elastic_net_spec)
+
+en_grid <- grid_regular(penalty(range = c(-5, 5)), 
+                        mixture(range = c(0, 1)), levels = 10)
+#fit models to folded data
+tune_res_en <- tune_grid(
+  en_workflow,
+  resamples = spotify_fold, 
+  grid = en_grid
+)
+
+autoplot(tune_res_en)
+```
+We can continue to see the consistenct in collinearity. 
+
+I wanted to see what the mean was at this point to understand why there was no variation in my data and I laughed aloud. 
+```{r}
+ collect_metrics(tune_res_en)%>%
+  arrange(-mean)
+```
+Once again, a mean= 1.0000000.
+
+#Random Forest
+Not that this would do much but I decided to look at my data with a random forest model, folding the data with the trees a little more than I already had. 
+
+```{r}
+ #random forest
+ rf_spec <- rand_forest() %>%
+  set_engine("ranger", importance = "impurity") %>%
+  set_mode("classification")
+rf_wf <- workflow() %>%
+  add_model(rf_spec %>% set_args(mtry = tune(), trees = tune(), min_n = tune())) %>%
+  add_recipe(spotify_recipe)
+
+param_grid2 <- grid_regular(mtry(range = c(1, 8)),trees(range = c(50,300)),min_n(range=c(1,5)), levels = 8)
+tune_res_rf <- tune_grid(
+  rf_wf,
+  resamples = spotify_fold,
+  grid = param_grid2,
+  metrics = metric_set(roc_auc)
+)
+autoplot(tune_res_rf)
+```
+
+#Boosted Model
+Continue to see the same trend throughout my data. 
+```{r}
+#boosted model
+bt_spec <- boost_tree() %>%
+  set_engine("xgboost") %>%
+  set_mode("classification")
+bt_wf <- workflow() %>%
+  add_model(bt_spec %>% set_args(trees = tune())) %>%
+  add_recipe(spotify_recipe)
+param_grid3 <- grid_regular(trees(range = c(10,2000)), levels = 10)
+tune_res_bt <- tune_grid(
+  bt_wf,
+  resamples = spotify_fold,
+  grid = param_grid3,
+  metrics = metric_set(roc_auc)
+)
+autoplot(tune_res_bt)
+```
+
+Once again, through roc_auc I wanted to see it under the `collect_metrics()` function. Same results.
+```{r}
+#we can see the details of the plot here
+collect_metrics(tune_res_bt)%>%
+  arrange(-mean)
+```
+
+Even though my data analysis was quite straightforward I wanted to compare the random forest and boosted tree to my classification data. 
+```{r}
+#compare between boosted tree and random forest
+a<-collect_metrics(tune_res_rf)%>%
+  arrange(-mean)%>%
+  filter(row_number()==1)
+a['type']<-'rf'
+b<-collect_metrics(tune_res_bt)%>%
+  arrange(-mean)%>%
+  filter(row_number()==1)
+b['type']<-'bt'
+inner1<-rbind(a[4:10],b[2:8])
+inner1
+```
+My assumptions lie true about the mean=1.
+
+##Conclusion
+
+Let's get it off the table. My data, was not the most ideal to work with. It was because of my response variable. The approach I had on my dataset was the same that was applied on the way we analyzed the `titanic` dataset in class and through section. The response variable in those yielded `yes` or `no`, on whether someone survived or not. The same way I interpreted my `streamed` or `skipped` to see if I had streamed the song or skipped it instead. 
+
+I am sure if I had chosen `minutes_played` as the response variable, I could have yielded a variety of results. However, as I continued to work on my data and tackle more and more errors, the outputs of my code didn't start successfully running until last week. Even then, I had numerous errors and I couldn't have completed my code without the help of my peers, shoutout to Ryan C., I think you had him a previous quarter! 
+
+While I could have changed my response variable, I didn't feel comfortable doing it so last minute and have to reinterpret my data. 
+
+This project to me, is a fail in terms of analysis but really taught me how to hash out my errors and really debug a lot of my work. Because the errors were so specific to model tuning and trees, it was difficult to find online sources to help there were only so many. Even then, the circumstances of my code were too different so I really had to think and work on debugging my code. 
+
+I debugged so much I came up with the phrase "new error, new ground" because as each error changed to another I had to spend a few hours fixing it. I really underestimated the trouble my code and dataset would give me. 
+
+So overall, with my analysis it is safe to say that I will be streaming whichever song I decide to play. I don't listen to music often but we can assume it would be DAY6, or KPOP, and that I would not skip the song. 
+
+
+
